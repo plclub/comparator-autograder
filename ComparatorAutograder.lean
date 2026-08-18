@@ -1,0 +1,3 @@
+import ComparatorAutograder.Attributes
+import ComparatorAutograder.Basic
+import ComparatorAutograder.Comparator

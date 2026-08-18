@@ -1,0 +1,16 @@
+name = "ComparatorAutograder"
+version = "0.1.0"
+defaultTargets = ["comparatorautograder"]
+
+[[lean_lib]]
+name = "ComparatorAutograder"
+
+[[lean_exe]]
+name = "comparatorautograder"
+root = "Main"
+
+[[require]]
+name = "comparator"
+git = "https://github.com/xhalo32/comparator"
+# git = "file:///home/niklash/Projects/comparator"
+rev = "ignore-missing"
