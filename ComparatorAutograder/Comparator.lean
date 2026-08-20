@@ -139,10 +139,14 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
   let primitive ← primitiveTargets
   let mut worklist := primitive
   let mut checked := {}
-  for name in definitionNames do
-    let ⟨_, st⟩ ← IO.ofExcept <| compareDefinitionAt challenge solution name primitive |>.run { worklist, checked }
-    worklist := st.worklist
-    checked := st.checked
+
+  -- I don't think we need this: an autogradedHole should always come with autogradedProof which will check the hole
+  -- for name in definitionNames do
+  --   -- TODO test that this works as expected
+  --   let ⟨_, st⟩ ← IO.ofExcept <| compareDefinitionAt challenge solution name primitive |>.run { worklist, checked }
+  --   worklist := st.worklist
+  --   checked := st.checked
+
   let mut result := none
   if ← getNanodaEnabled then
     result := result <|> (← runNanoda solutionExport)
@@ -166,7 +170,7 @@ def compareIt : Comparator.M (Array (Name × Except FailureReason Unit)) := do
     ++ (← primitiveTargets) ++ (← getDefinitionNames)
 
   let challengeModule ← getChallengeModule
-  safeLakeBuild challengeModule -- TODO throw `bug` if this fails?
+  safeLakeBuild challengeModule -- Note: this is already built in main
   let challengeExport ← safeExport challengeModule exportTargets
 
   let solutionModule ← getSolutionModule

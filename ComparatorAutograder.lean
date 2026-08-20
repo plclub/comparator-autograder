@@ -1,3 +1,2 @@
-import ComparatorAutograder.Attributes
-import ComparatorAutograder.Basic
-import ComparatorAutograder.Comparator
+import ComparatorAutograder.MainSupport
+import ComparatorAutograder.Report

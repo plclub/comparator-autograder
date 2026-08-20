@@ -1,4 +1,4 @@
-import ComparatorAutograder.Attributes
+import ComparatorAutograderLib
 
 def X := 5
 

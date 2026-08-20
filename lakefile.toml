@@ -10,6 +10,11 @@ name = "comparatorautograder"
 root = "Main"
 
 [[require]]
+name = "comparator-autograder-lib"
+git = "https://codeberg.org/xhalo32/comparator-autograder-lib.git"
+rev = "40472499fc6f75c6ed58c46e8e7e9e3a00930a13"
+
+[[require]]
 name = "comparator"
 git = "https://github.com/xhalo32/comparator"
 # git = "file:///home/niklash/Projects/comparator"
