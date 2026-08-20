@@ -2,4 +2,4 @@
 -- Should be rejected because the kind does not match.
 axiom n : Nat
 
-theorem foo : n + 17 = 34 := sorry
+theorem foo : n = n := @Eq.refl Nat n

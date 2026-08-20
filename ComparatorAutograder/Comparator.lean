@@ -14,7 +14,7 @@ structure Context where
   definitionTargets : Std.HashSet Lean.Name
   target : Lean.Name
 
-abbrev CompareM := ReaderT Context <| StateT Compare.State <| Except FailureReason
+abbrev CompareM := ReaderT Context <| StateT Compare.State <| ExceptT FailureReason Id -- change Id to IO to have access to IO functions
 
 def addWorklist (n : Lean.Name) : CompareM Unit := do
   if !(← get).checked.contains n then
@@ -23,77 +23,9 @@ def addWorklist (n : Lean.Name) : CompareM Unit := do
 def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
   runForUsedConsts info addWorklist
 
-partial def loop : CompareM Unit := do
-  if (← get).worklist.isEmpty then
-    return ()
-
-  let target ← modifyGet fun s => (s.worklist.back!, { s with worklist := s.worklist.pop })
-  if (← get).checked.contains target then
-    loop
-  else
-    let some challengeConst := (← read).challenge.constMap[target]?
-      | throw <| constNotFoundInChallenge target
-    let some solutionConst := (← read).solution.constMap[target]?
-      | throw <| constNotFoundInSolution target
-
-    if (← read).definitionTargets.contains solutionConst.name
-        || (← read).target == solutionConst.name then
-      solutionConst.type.getUsedConstants.forM addWorklist
-    else
-      if challengeConst != solutionConst then
-        throw <| constDoesNotMatch target
-      addRelevantConsts solutionConst
-
-    modify fun s => { s with checked := s.checked.insert target }
-    loop
-
-def compareTheoremAt (challenge solution : Export.ExportedEnv) (target : Lean.Name)
-    (definitionTargets : Array Lean.Name) : StateT Compare.State (Except FailureReason) Unit := do
-  let some challengeConst := challenge.constMap[target]?
-    | throw <| constNotFoundInChallenge target
-
-  let some solutionConst := solution.constMap[target]?
-    | throw <| constNotFoundInSolution target
-
-  let (challengeConst, solutionConst) ←
-    match challengeConst, solutionConst with
-    | .thmInfo cc, .thmInfo sc
-    | .axiomInfo cc, .axiomInfo sc => pure (cc.toConstantVal, sc.toConstantVal)
-    | _, _ => throw <| wrongKind target
-
-  if challengeConst != solutionConst then
-    throw <| constDoesNotMatch target
-
-  modify fun s => { s with worklist := s.worklist ++ challengeConst.type.getUsedConstants }
-
-  let definitionTargets := Std.HashSet.ofArray definitionTargets
-  loop.run { challenge, solution, definitionTargets, target }
-
-def compareDefinitionAt (challenge solution : Export.ExportedEnv) (target : Lean.Name)
-    (definitionTargets : Array Lean.Name) : StateT Compare.State (Except FailureReason) Unit := do
-
-  let some challengeConst := challenge.constMap[target]?
-    | throw <| constNotFoundInChallenge target
-
-  let some solutionConst := solution.constMap[target]?
-    | throw <| constNotFoundInSolution target
-
-  let .defnInfo challengeConst := challengeConst
-    | throw <| bug s!"Challenge constant is not a definition: '{target}'"
-  let .defnInfo solutionConst := solutionConst
-    | throw <| wrongKind target
-
-  if !definitionHoleMatches challengeConst solutionConst then
-    throw <| holeDoesNotMatch target
-
-  modify fun s => { s with worklist := s.worklist.push solutionConst.name }
-
-  let definitionTargets := Std.HashSet.ofArray definitionTargets
-  loop.run { challenge, solution, definitionTargets, target }
+def defaultAxioms := #[`propext, `Classical.choice, `Quot.sound]
 
 namespace Axioms
-
-def defaultAxioms := #[`propext, `Classical.choice, `Quot.sound]
 
 abbrev AxiomsM := ReaderT Comparator.Axioms.Context <| StateT Comparator.Axioms.State <| Except FailureReason
 
@@ -126,9 +58,61 @@ where
 
 end Axioms
 
-def compareAndCheckAxioms (challenge solution : Export.ExportedEnv) (definitionNames : Array Name) (name : Name) : StateT Compare.State (Except FailureReason) Unit := do
-  compareTheoremAt challenge solution name definitionNames
-  Axioms.loop.run { solution, legalAxioms := Std.HashSet.ofArray Axioms.defaultAxioms } |>.run' { worklist := #[name], checked := {} }
+partial def loop : CompareM Unit := do
+  if (← get).worklist.isEmpty then
+    return ()
+
+  let target ← modifyGet fun s => (s.worklist.back!, { s with worklist := s.worklist.pop })
+  if (← get).checked.contains target then
+    loop
+  else
+    let some challengeConst := (← read).challenge.constMap[target]?
+      | throw <| constNotFoundInChallenge target
+    let some solutionConst := (← read).solution.constMap[target]?
+      | throw <| constNotFoundInSolution target
+
+    if (← read).definitionTargets.contains solutionConst.name then
+      let .defnInfo challengeConst := challengeConst
+        | throw <| bug s!"Challenge constant is not a definition: '{target}'"
+      let .defnInfo solutionConst := solutionConst
+        | throw <| wrongKind target
+
+      if !definitionHoleMatches challengeConst solutionConst then
+        throw <| holeDoesNotMatch target
+
+    Axioms.loop.run { solution := (← read).solution, legalAxioms := Std.HashSet.ofArray defaultAxioms } |>.run' { worklist := #[target], checked := {} } -- TODO keep track of checked to avoid duplicate work
+
+    if (← read).definitionTargets.contains solutionConst.name
+        || (← read).target == solutionConst.name then
+      solutionConst.type.getUsedConstants.forM addWorklist
+    else
+      if challengeConst != solutionConst then
+        throw <| constDoesNotMatch target
+      addRelevantConsts solutionConst
+
+    modify fun s => { s with checked := s.checked.insert target }
+    loop
+
+def compareTheoremAt (challenge solution : Export.ExportedEnv) (definitionTargets : Array Lean.Name) (target : Lean.Name) : StateT Compare.State (ExceptT FailureReason Id) Unit := do
+  let some challengeConst := challenge.constMap[target]?
+    | throw <| constNotFoundInChallenge target
+
+  let some solutionConst := solution.constMap[target]?
+    | throw <| constNotFoundInSolution target
+
+  let (challengeConst, solutionConst) ←
+    match challengeConst, solutionConst with
+    | .thmInfo cc, .thmInfo sc
+    | .axiomInfo cc, .axiomInfo sc => pure (cc.toConstantVal, sc.toConstantVal)
+    | _, _ => throw <| wrongKind target
+
+  if challengeConst != solutionConst then
+    throw <| constDoesNotMatch target
+
+  modify fun s => { s with worklist := s.worklist ++ challengeConst.type.getUsedConstants }
+
+  let definitionTargets := Std.HashSet.ofArray definitionTargets
+  loop.run { challenge, solution, definitionTargets, target }
 
 def myVerifyMatch (challengeExport : String) (solutionExport : String) :
     M (Array (Name × Except FailureReason Unit)) := do
@@ -156,7 +140,7 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
 
   let mut results := #[]
   for name in theoremNames do
-    match compareAndCheckAxioms challenge solution definitionNames name |>.run { worklist, checked } with
+    match ← compareTheoremAt challenge solution definitionNames name |>.run { worklist, checked } |>.run with
     | .ok ⟨res, st⟩ =>
       results := results.push ⟨name, .ok res⟩
       worklist := st.worklist

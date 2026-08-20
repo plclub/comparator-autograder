@@ -1,1 +1,1 @@
-{"theoremReports":[{"error":{"illegalAxiom":{"axiomName":"sorryAx","target":"sorryAx"}},"name":{"const":"foo","mod":"Challenge"},"points":{"den":1,"num":1}}]}
+{"theoremReports":[{"error":{"constDoesNotMatch":{"target":"foo"}},"name":{"const":"foo","mod":"Challenge"},"points":{"den":1,"num":1}}]}
