@@ -27,7 +27,7 @@ Exit code 0 doesn't mean all the tests passed, the report contains that informat
 
 ## Attributes
 
-Attributse are defined in [comparator-autograder-lib](https://codeberg.org/xhalo32/comparator-autograder-lib):
+Attributse are defined in [comparator-autograder-lib](https://github.com/plclub/comparator-autograder-lib):
 
 - `@[autogradedProof <points>]` where `<points>` is a number (supports scientific notation) or a reduced fraction. Tells the autograder to grade the theorem.
 - `@[autogradedHole]`: tells comparator that a definition is a [hole](https://github.com/leanprover/comparator/#definition-holes).
