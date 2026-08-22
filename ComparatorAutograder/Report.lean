@@ -8,7 +8,7 @@ def Except.toErr (self : Except ε α) := match self with
 namespace ComparatorAutograder
 
 local instance : Lean.ToJson Rat where
-  toJson r := Lean.Json.mkObj [⟨"den", r.den⟩, ⟨"num", r.num⟩]
+  toJson r := Lean.Json.mkObj [⟨"num", r.num⟩, ⟨"den", r.den⟩]
 
 structure TheoremReport where
   name : ConstWithMod

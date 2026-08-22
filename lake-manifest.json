@@ -15,7 +15,7 @@
    "type": "git",
    "subDir": null,
    "scope": "",
-   "rev": "2ed6dbe817332405161d12c7597c872d6e730642",
+   "rev": "e79bef2904899a0b8f84ed975310ad4875d765bc",
    "name": "«comparator-autograder-lib»",
    "manifestFile": "lake-manifest.json",
    "inputRev": "main",
