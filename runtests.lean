@@ -50,11 +50,9 @@ partial def copyDirContents (src : FilePath) (dst : FilePath) : IO Unit := do
     else
       copyFile srcPath dstPath
 
--- TODO clone the lib locally to share it
-def createAdditionalFiles (dir : FilePath) : IO Unit := do
-  -- Only generate a default lakefile if the test project doesn't provide its own
-  if !(← (dir / "lakefile.toml").pathExists) then
-    let lakefileContent :=
+-- NOTE: This does not take overrides into account
+def createAdditionalFiles (rootPath : FilePath) (dir : FilePath) : IO Unit := do
+  let lakefileContent :=
 r#"name = "comparatortest"
 version = "0.1.0"
 
@@ -69,7 +67,27 @@ name = "comparator-autograder-lib"
 git = "https://codeberg.org/xhalo32/comparator-autograder-lib.git"
 rev = "40472499fc6f75c6ed58c46e8e7e9e3a00930a13"
 "#
-    IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
+  IO.FS.writeFile (dir / "lakefile.toml") lakefileContent
+  let overrides := Json.mkObj [
+    ⟨"packages", .arr #[Json.mkObj [
+      ⟨"dir", .str (rootPath / ".lake/packages/comparator-autograder-lib").toString⟩,
+      ⟨"name", .str "«comparator-autograder-lib»"⟩,
+      ⟨"inherited", .bool false⟩,
+      ⟨"type", .str "path"⟩,
+    ]]⟩,
+    ⟨"schemaVersion", .str "1.2.0"⟩
+  ]
+  IO.FS.createDir (dir / ".lake")
+  IO.FS.writeFile (dir / ".lake" / "package-overrides.json") overrides.compress
+  let manifest :=
+r#"
+{"version": "1.2.0",
+ "packagesDir": ".lake/packages",
+ "packages": [],
+ "name": "comparatortest",
+ "lakeDir": ".lake"
+}"#
+  IO.FS.writeFile (dir / "lake-manifest.json") manifest
 
 def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) (env : Array (String × Option String) := #[]) : IO Nat := do
   let output ← IO.Process.spawn {
@@ -81,20 +99,10 @@ def runCommandInDir (dir : FilePath) (cmd : String) (args : Array String) (env :
   let exitCode ← output.wait
   pure exitCode.toNat
 
-def readTestConfig (configPath : FilePath) : IO TestConfig := do
-  let content ← IO.FS.readFile configPath
-  match Lean.Json.parse content with
-  | .error e => throw <| IO.userError s!"Failed to parse JSON: {e}"
-  | .ok json =>
-    match Lean.fromJson? json with
-    | .error e => throw <| IO.userError s!"Failed to decode config: {e}"
-    | .ok cfg => pure cfg
-
 def getTempDir : IO FilePath := do
   return "/tmp" / s!"lean_test_{← IO.rand 0 999999}"
 
-def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : FilePath)
-    (comparatorPath : FilePath) : IO TestResult := do
+def runTestProject (rootPath : FilePath) (projectPath : FilePath) (projectName : String) (comparatorPath : FilePath) : IO TestResult := do
   try
     let tempDir ← getTempDir
     IO.FS.createDirAll tempDir
@@ -103,7 +111,7 @@ def runTestProject (projectPath : FilePath) (projectName : String) (testsDir : F
 
     copyFile "lean-toolchain" (tempDir / "lean-toolchain")
 
-    createAdditionalFiles tempDir
+    createAdditionalFiles rootPath tempDir
 
     let _ ← runCommandInDir tempDir "lake" #["build", "Challenge", "Solution"]
     let exitCode ← runCommandInDir tempDir "lake"
@@ -178,7 +186,7 @@ def main (args : List String) : IO UInt32 := do
   for projectPath in projects do
     let projectName := projectPath.fileName.get!
     IO.println s!"\n## Running test: {projectName}\n"
-    let result ← runTestProject projectPath projectName testsDir autograderPath
+    let result ← runTestProject (← getCurrentDir) projectPath projectName autograderPath
     results := results.push result
     match result with
     | .success _ => pure ()

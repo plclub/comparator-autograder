@@ -11,30 +11,38 @@ open Lean Comparator FailureReason
 structure Context where
   challenge : Export.ExportedEnv
   solution : Export.ExportedEnv
-  definitionTargets : Std.HashSet Lean.Name
+  definitionHoles : Std.HashSet Lean.Name
   target : Lean.Name
 
-abbrev CompareM := ReaderT Context <| StateT Compare.State <| ExceptT FailureReason Id -- change Id to IO to have access to IO functions
+structure State where
+  compareWorklist : Array Lean.Name
+  compareChecked : Std.HashSet Lean.Name
+  axiomsWorklist : Array Lean.Name
+  axiomsChecked : Std.HashSet Lean.Name
 
-def addWorklist (n : Lean.Name) : CompareM Unit := do
-  if !(← get).checked.contains n then
-    modify fun s => { s with worklist := s.worklist.push n }
+abbrev CompareM := ReaderT Context <| StateT State <| ExceptT FailureReason Id -- change Id to IO to have access to IO functions
+
+def addCompareWorklist (n : Lean.Name) : CompareM Unit := do
+  if !(← get).compareChecked.contains n then
+    modify fun s => { s with compareWorklist := s.compareWorklist.push n }
+
+def addAxiomsWorklist (n : Lean.Name) : CompareM Unit := do
+  if !(← get).axiomsChecked.contains n then
+    modify fun s => { s with axiomsWorklist := s.axiomsWorklist.push n }
 
 def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
-  runForUsedConsts info addWorklist
+  runForUsedConsts info addCompareWorklist
 
 def defaultAxioms := #[`propext, `Classical.choice, `Quot.sound]
 
 namespace Axioms
 
-abbrev AxiomsM := ReaderT Comparator.Axioms.Context <| StateT Comparator.Axioms.State <| Except FailureReason
-
-partial def loop : AxiomsM Unit := do
-  if (← get).worklist.isEmpty then
+partial def loop : CompareM Unit := do
+  if (← get).axiomsWorklist.isEmpty then
     return ()
 
-  let target ← modifyGet fun s => (s.worklist.back!, { s with worklist := s.worklist.pop })
-  if (← get).checked.contains target then
+  let target ← modifyGet fun s => (s.axiomsWorklist.back!, { s with axiomsWorklist := s.axiomsWorklist.pop })
+  if (← get).axiomsChecked.contains target then
     loop
   else
     let some info := (← read).solution.constMap[target]?
@@ -42,28 +50,28 @@ partial def loop : AxiomsM Unit := do
 
     runForUsedConsts info validateConst
 
-    modify fun s => { s with checked := s.checked.insert target }
+    modify fun s => { s with axiomsChecked := s.axiomsChecked.insert target }
     loop
 where
-  validateConst (n : Lean.Name) : AxiomsM Unit := do
+  validateConst (n : Lean.Name) : CompareM Unit := do
     let some info := (← read).solution.constMap[n]?
       | throw <| constNotFoundInSolution n
 
     if let .axiomInfo info := info then
-      if !(← read).legalAxioms.contains info.name then
+      if !defaultAxioms.contains info.name then
         throw <| illegalAxiom n info.name
 
-    if !(← get).checked.contains n then
-      modify fun s => { s with worklist := s.worklist.push n }
+    if !(← get).axiomsChecked.contains n then
+      modify fun s => { s with axiomsWorklist := s.axiomsWorklist.push n }
 
 end Axioms
 
 partial def loop : CompareM Unit := do
-  if (← get).worklist.isEmpty then
+  if (← get).compareWorklist.isEmpty then
     return ()
 
-  let target ← modifyGet fun s => (s.worklist.back!, { s with worklist := s.worklist.pop })
-  if (← get).checked.contains target then
+  let target ← modifyGet fun s => (s.compareWorklist.back!, { s with compareWorklist := s.compareWorklist.pop })
+  if (← get).compareChecked.contains target then
     loop
   else
     let some challengeConst := (← read).challenge.constMap[target]?
@@ -71,7 +79,7 @@ partial def loop : CompareM Unit := do
     let some solutionConst := (← read).solution.constMap[target]?
       | throw <| constNotFoundInSolution target
 
-    if (← read).definitionTargets.contains solutionConst.name then
+    if (← read).definitionHoles.contains solutionConst.name then
       let .defnInfo challengeConst := challengeConst
         | throw <| bug s!"Challenge constant is not a definition: '{target}'"
       let .defnInfo solutionConst := solutionConst
@@ -80,24 +88,26 @@ partial def loop : CompareM Unit := do
       if !definitionHoleMatches challengeConst solutionConst then
         throw <| holeDoesNotMatch target
 
-    Axioms.loop.run { solution := (← read).solution, legalAxioms := Std.HashSet.ofArray defaultAxioms } |>.run' { worklist := #[target], checked := {} } -- TODO keep track of checked to avoid duplicate work
+    addAxiomsWorklist target
+    Axioms.loop
 
-    if (← read).definitionTargets.contains solutionConst.name
+    if (← read).definitionHoles.contains solutionConst.name
         || (← read).target == solutionConst.name then
-      solutionConst.type.getUsedConstants.forM addWorklist
+      solutionConst.type.getUsedConstants.forM addCompareWorklist
     else
       if challengeConst != solutionConst then
         throw <| constDoesNotMatch target
       addRelevantConsts solutionConst
 
-    modify fun s => { s with checked := s.checked.insert target }
+    modify fun s => { s with compareChecked := s.compareChecked.insert target }
     loop
 
-def compareTheoremAt (challenge solution : Export.ExportedEnv) (definitionTargets : Array Lean.Name) (target : Lean.Name) : StateT Compare.State (ExceptT FailureReason Id) Unit := do
-  let some challengeConst := challenge.constMap[target]?
+def compareTheoremAt : CompareM Unit := do
+  let target := (← read).target
+  let some challengeConst := (← read).challenge.constMap[target]?
     | throw <| constNotFoundInChallenge target
 
-  let some solutionConst := solution.constMap[target]?
+  let some solutionConst := (← read).solution.constMap[target]?
     | throw <| constNotFoundInSolution target
 
   let (challengeConst, solutionConst) ←
@@ -109,27 +119,20 @@ def compareTheoremAt (challenge solution : Export.ExportedEnv) (definitionTarget
   if challengeConst != solutionConst then
     throw <| constDoesNotMatch target
 
-  modify fun s => { s with worklist := s.worklist ++ challengeConst.type.getUsedConstants }
+  modify fun s => { s with compareWorklist := s.compareWorklist ++ challengeConst.type.getUsedConstants }
+  loop
 
-  let definitionTargets := Std.HashSet.ofArray definitionTargets
-  loop.run { challenge, solution, definitionTargets, target }
+  -- Check axioms last to favor showing other errors
+  addAxiomsWorklist target
+  Axioms.loop
 
 def myVerifyMatch (challengeExport : String) (solutionExport : String) :
     M (Array (Name × Except FailureReason Unit)) := do
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
   let theoremNames ← getTheoremNames
-  let definitionNames ← getDefinitionNames
+  let definitionHoles := Std.HashSet.ofArray (← getDefinitionNames)
   let primitive ← primitiveTargets
-  let mut worklist := primitive
-  let mut checked := {}
-
-  -- I don't think we need this: an autogradedHole should always come with autogradedProof which will check the hole
-  -- for name in definitionNames do
-  --   -- TODO test that this works as expected
-  --   let ⟨_, st⟩ ← IO.ofExcept <| compareDefinitionAt challenge solution name primitive |>.run { worklist, checked }
-  --   worklist := st.worklist
-  --   checked := st.checked
 
   let mut result := none
   if ← getNanodaEnabled then
@@ -138,13 +141,18 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
   if let some error := result then
     throw <| IO.userError error
 
+  let mut st := {
+    compareWorklist := primitive
+    compareChecked := {}
+    axiomsWorklist := #[]
+    axiomsChecked := {}
+  }
   let mut results := #[]
   for name in theoremNames do
-    match ← compareTheoremAt challenge solution definitionNames name |>.run { worklist, checked } |>.run with
-    | .ok ⟨res, st⟩ =>
+    match compareTheoremAt |>.run { challenge, solution, definitionHoles, target := name } |>.run st with
+    | .ok ⟨res, st'⟩ =>
       results := results.push ⟨name, .ok res⟩
-      worklist := st.worklist
-      checked := st.checked
+      st := st'
     | .error e =>
       results := results.push ⟨name, .error e⟩
   return results
