@@ -23,7 +23,7 @@ def main : IO UInt32 := do
     solution_module := solutionModule
     theorem_names := theoremNames.map fun n => n.1.const.toString
     definition_names := some <| holeNames.map fun n => n.const.toString
-    permitted_axioms := #[]
+    permitted_axioms := #["propext", "Classical.choice", "Quot.sound"]
     enable_nanoda := false
   }
 

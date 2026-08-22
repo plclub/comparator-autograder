@@ -11,7 +11,8 @@ open Lean Comparator FailureReason
 structure Context where
   challenge : Export.ExportedEnv
   solution : Export.ExportedEnv
-  definitionHoles : Std.HashSet Lean.Name
+  holes : Std.HashSet Lean.Name
+  legalAxioms : Std.HashSet Lean.Name
   target : Lean.Name
 
 structure State where
@@ -20,7 +21,9 @@ structure State where
   axiomsWorklist : Array Lean.Name
   axiomsChecked : Std.HashSet Lean.Name
 
-abbrev CompareM := ReaderT Context <| StateT State <| ExceptT FailureReason Id -- change Id to IO to have access to IO functions
+-- Change `Id` to `IO` to have access to IO.
+-- In `myVerifyMatch` write `let r : IO _ := compareTheoremAt` for `match ← r` to work.
+abbrev CompareM := ReaderT Context <| StateT State <| ExceptT FailureReason Id
 
 def addCompareWorklist (n : Lean.Name) : CompareM Unit := do
   if !(← get).compareChecked.contains n then
@@ -32,8 +35,6 @@ def addAxiomsWorklist (n : Lean.Name) : CompareM Unit := do
 
 def addRelevantConsts (info : Lean.ConstantInfo) : CompareM Unit := do
   runForUsedConsts info addCompareWorklist
-
-def defaultAxioms := #[`propext, `Classical.choice, `Quot.sound]
 
 namespace Axioms
 
@@ -58,13 +59,17 @@ where
       | throw <| constNotFoundInSolution n
 
     if let .axiomInfo info := info then
-      if !defaultAxioms.contains info.name then
+      if !(← read).legalAxioms.contains info.name then
         throw <| illegalAxiom n info.name
 
-    if !(← get).axiomsChecked.contains n then
-      modify fun s => { s with axiomsWorklist := s.axiomsWorklist.push n }
+    addAxiomsWorklist n
 
 end Axioms
+
+/- There is quite a bit of room to specify restraints on the inductive: number of constructors, can it be recursive, etc. We opt for just its type (via `toConstantVal`) and safety. -/
+def inductiveHoleMatches (challengeHole solutionHole : Lean.InductiveVal) : Bool :=
+  challengeHole.toConstantVal == solutionHole.toConstantVal
+    && challengeHole.isUnsafe == solutionHole.isUnsafe
 
 partial def loop : CompareM Unit := do
   if (← get).compareWorklist.isEmpty then
@@ -79,20 +84,29 @@ partial def loop : CompareM Unit := do
     let some solutionConst := (← read).solution.constMap[target]?
       | throw <| constNotFoundInSolution target
 
-    if (← read).definitionHoles.contains solutionConst.name then
-      let .defnInfo challengeConst := challengeConst
-        | throw <| bug s!"Challenge constant is not a definition: '{target}'"
-      let .defnInfo solutionConst := solutionConst
-        | throw <| wrongKind target
+    if (← read).holes.contains solutionConst.name then
+      match challengeConst with
+      | .inductInfo challengeConst =>
+        let .inductInfo solutionConst := solutionConst
+          | throw <| wrongKind target
 
-      if !definitionHoleMatches challengeConst solutionConst then
-        throw <| holeDoesNotMatch target
+        if !inductiveHoleMatches challengeConst solutionConst then
+          throw <| holeDoesNotMatch target
+
+      | .defnInfo challengeConst =>
+        let .defnInfo solutionConst := solutionConst
+          | throw <| wrongKind target
+
+        if !definitionHoleMatches challengeConst solutionConst then
+          throw <| holeDoesNotMatch target
+      | _ => throw <| bug s!"Hole in challenge is neither a definition nor an inductive: '{target}'"
 
     addAxiomsWorklist target
     Axioms.loop
 
-    if (← read).definitionHoles.contains solutionConst.name
+    if (← read).holes.contains solutionConst.name
         || (← read).target == solutionConst.name then
+      -- TODO is `getUsedConstants` correct for inductives?
       solutionConst.type.getUsedConstants.forM addCompareWorklist
     else
       if challengeConst != solutionConst then
@@ -131,7 +145,8 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
   let challenge ← Export.parseStream (← stringStream challengeExport)
   let solution ← Export.parseStream (← stringStream solutionExport)
   let theoremNames ← getTheoremNames
-  let definitionHoles := Std.HashSet.ofArray (← getDefinitionNames)
+  let holes := Std.HashSet.ofArray (← getDefinitionNames)
+  let legalAxioms := Std.HashSet.ofArray (← getLegalAxioms)
   let primitive ← primitiveTargets
 
   let mut result := none
@@ -149,7 +164,8 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
   }
   let mut results := #[]
   for name in theoremNames do
-    match compareTheoremAt |>.run { challenge, solution, definitionHoles, target := name } |>.run st with
+    let r := compareTheoremAt |>.run { challenge, solution, holes, legalAxioms, target := name } |>.run st
+    match r with
     | .ok ⟨res, st'⟩ =>
       results := results.push ⟨name, .ok res⟩
       st := st'
