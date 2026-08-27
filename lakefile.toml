@@ -12,9 +12,9 @@ root = "Main"
 [[require]]
 name = "comparator-autograder-lib"
 git = "https://github.com/plclub/comparator-autograder-lib"
-rev = "main"
+rev = "v4.34.0-rc2"
 
 [[require]]
 name = "comparator"
 git = "https://github.com/xhalo32/comparator"
-rev = "ignore-missing"
+rev = "ignore-missing-4.34.0-rc2"

@@ -149,10 +149,7 @@ def myVerifyMatch (challengeExport : String) (solutionExport : String) :
   let legalAxioms := Std.HashSet.ofArray (← getLegalAxioms)
   let primitive ← primitiveTargets
 
-  let mut result := none
-  if ← getNanodaEnabled then
-    result := result <|> (← runNanoda solutionExport)
-  result := result <|> (← runKernel solution)
+  let result ← runBuiltinKernel solution
   if let some error := result then
     throw <| IO.userError error
 
